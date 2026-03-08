@@ -511,8 +511,8 @@ setup_ray_alias() {
   local block
   block="$(cat <<'BLOCK'
 # ---- RAY_ALIASES ----
-# RAY_ADDRESS is respected by all ray CLI commands (job submit/log/stop/list)
-export RAY_ADDRESS="http://data-ray-dev:8265"
+# Default Ray prod address (NOT exported — only used by ray-* helpers below)
+RAY_PROD="http://data-ray-dev:8265"
 
 # ray-submit: upload code + submit with standard boilerplate
 #
@@ -593,8 +593,10 @@ ray-submit() {
   runtime_env="${runtime_env}}"
 
   # Build ray job submit args
+  local addr="${RAY_PROD}"
   local -a submit_args=(
     ray job submit
+    --address "$addr"
     --working-dir "$workdir"
     --runtime-env-json "$runtime_env"
   )
@@ -611,6 +613,11 @@ ray-submit() {
   echo "+ ${submit_args[*]}"
   "${submit_args[@]}"
 }
+
+# Convenience wrappers for remote ray commands (never pollute RAY_ADDRESS)
+ray-log()  { ray job logs  --address "$RAY_PROD" "$@"; }
+ray-stop() { ray job stop  --address "$RAY_PROD" "$@"; }
+ray-list() { ray job list  --address "$RAY_PROD" "$@"; }
 # ---- /RAY_ALIASES ----
 BLOCK
 )"
