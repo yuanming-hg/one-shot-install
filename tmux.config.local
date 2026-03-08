@@ -507,3 +507,9 @@ tmux_conf_uninstall_plugins_on_reload=true
 # "$@"
 # # /!\ do not remove the previous line
 # #     do not write below this line
+
+# -- terminal integration ------------------------------------------------------
+
+# Allow OSC sequences to pass through tmux to the outer terminal.
+# Required for WezTerm/iTerm2 user var detection (e.g. in_tmux) via OSC 1337.
+set -g allow-passthrough on

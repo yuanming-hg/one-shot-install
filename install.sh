@@ -894,8 +894,16 @@ add_tmux_jediterm_fix_to_zshrc() {
   block="$(cat <<'EOF'
 # ---- ZSH_TMUX_JEDITERM_FIX ----
 # tmux configuration - fix intellij terminal bug
+# WezTerm adaptive leader key: signal tmux state via OSC 1337 user var
 if [[ -n "$TMUX" ]]; then
   tmux set -g status-position top 2>/dev/null
+
+  # Emit in_tmux=1 on startup (new sessions) and on every prompt (reattach)
+  _wez_notify_tmux() {
+    printf '\033Ptmux;\033\033]1337;SetUserVar=%s=%s\007\033\\' in_tmux "$(printf '1' | base64)"
+  }
+  _wez_notify_tmux
+  precmd_functions+=(_wez_notify_tmux)
 
   # Fix JediTerm DA1 response leak (prints "6c" in prompt)
   # Only applies to IntelliJ/JediTerm terminal
@@ -904,6 +912,18 @@ if [[ -n "$TMUX" ]]; then
     clear
   fi
   # tmux set -g status-position bottom 2>/dev/null
+else
+  # Outer shell: detect tmux launch and clear on detach/exit
+  _wez_detect_tmux() {
+    case "$1" in
+      tmux|tmux\ *) printf '\033]1337;SetUserVar=%s=%s\007' in_tmux "$(printf '1' | base64)" ;;
+    esac
+  }
+  _wez_clear_tmux() {
+    printf '\033]1337;SetUserVar=%s=%s\007' in_tmux "$(printf '0' | base64)"
+  }
+  preexec_functions+=(_wez_detect_tmux)
+  precmd_functions+=(_wez_clear_tmux)
 fi
 # ---- /ZSH_TMUX_JEDITERM_FIX ----
 EOF
