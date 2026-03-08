@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-INSTALL_VERSION="1.1.0"
+INSTALL_VERSION="1.2.0"
 INSTALL_STATE_DIR="${HOME}/.config/shell"
 INSTALL_STATE_FILE="${INSTALL_STATE_DIR}/install-version"
 
@@ -500,6 +500,118 @@ if [[ -n "${ZSH_VERSION:-}" ]]; then
   }
 fi
 # ---- /UV_VENV_ALIASES ----
+BLOCK
+)"
+  append_block_if_missing "$common_file" "$marker" "$block"
+}
+
+setup_ray_alias() {
+  local common_file="${HOME}/.config/shell/common.sh"
+  local marker="RAY_ALIASES"
+  local block
+  block="$(cat <<'BLOCK'
+# ---- RAY_ALIASES ----
+# RAY_ADDRESS is respected by all ray CLI commands (job submit/log/stop/list)
+export RAY_ADDRESS="http://data-ray-dev:8265"
+
+# ray-submit: upload code + submit with standard boilerplate
+#
+# Usage: ray-submit [options] -- <command...>
+#
+# Options:
+#   -n, --name NAME       Job name (sets --submission-id NAME-TIMESTAMP and NAME=NAME env prefix)
+#   --pip FILE            pip requirements lock file
+#   --uv FILE             uv requirements lock file
+#   --dotenv              Prefix command with `dotenv run --`
+#   --env KEY=VAL         Extra env_vars in runtime env (repeatable)
+#   --exclude PATTERN     Extra exclude pattern (repeatable, .git always included)
+#   --no-upload           Skip upload_codes.py, use --working-dir . instead
+#   Any unrecognized flags before -- are passed through to `ray job submit`
+#
+# Examples:
+#   ray-submit -n pret_optflow --pip ray_workflow/video_pretraining/pip_reqs/requirements.lock --dotenv \
+#     -- python ray_pipeline/ray_actor_runner_v2.py \
+#       --actors pret_db_reader,pret_optical_flow \
+#       --workspace_dir /mnt/jfsweu/video_dataset/pretrain/v=20260303/subset=ytb_a2v_batch02102025 \
+#       --run_reader_on_head --level segment --input_checker_batch_size 100
+#
+#   ray-submit -n AUD_diar --pip ray_workflow/audio_generation/requirements.lock --dotenv \
+#     -- python ray_workflow/ray_actor_runner.py \
+#       --actors hybrid_lance_reader,videotts_speaker_diarization \
+#       --workspace_dir /mnt/jfsweu/audio_training_dataset_Nov2025/ytb/v251215
+ray-submit() {
+  local name="" reqs_key="" reqs_file="" use_dotenv=false no_upload=false
+  local -a env_pairs=() extra_excludes=() passthrough=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -n|--name)     name="$2"; shift 2 ;;
+      --pip)         reqs_key="pip"; reqs_file="$2"; shift 2 ;;
+      --uv)          reqs_key="uv";  reqs_file="$2"; shift 2 ;;
+      --dotenv)      use_dotenv=true; shift ;;
+      --env)         env_pairs+=("$2"); shift 2 ;;
+      --exclude)     extra_excludes+=("$2"); shift 2 ;;
+      --no-upload)   no_upload=true; shift ;;
+      --)            shift; break ;;
+      *)             passthrough+=("$1"); shift ;;
+    esac
+  done
+
+  if [[ $# -eq 0 ]]; then
+    echo "Usage: ray-submit [options] -- <command...>"
+    echo "Run 'ray-submit --help' or see comments in ~/.config/shell/common.sh"
+    return 1
+  fi
+
+  # Upload code
+  local workdir
+  if $no_upload; then
+    workdir="."
+  else
+    echo "Uploading code via upload_codes.py..."
+    workdir=$(python upload_codes.py) || { echo "upload_codes.py failed"; return 1; }
+  fi
+
+  # Build runtime-env-json
+  local excludes='".git"'
+  for ex in "${extra_excludes[@]}"; do
+    excludes="${excludes}, \"${ex}\""
+  done
+
+  local runtime_env="{"
+  # env_vars (add PYTHONPATH=. by default)
+  local env_json='"PYTHONPATH": "."'
+  for pair in "${env_pairs[@]}"; do
+    local k="${pair%%=*}" v="${pair#*=}"
+    env_json="${env_json}, \"${k}\": \"${v}\""
+  done
+  runtime_env="${runtime_env}\"env_vars\": {${env_json}}, \"excludes\": [${excludes}]"
+  # pip or uv requirements
+  if [[ -n "$reqs_key" ]]; then
+    runtime_env="${runtime_env}, \"${reqs_key}\": \"${reqs_file}\""
+  fi
+  runtime_env="${runtime_env}}"
+
+  # Build ray job submit args
+  local -a submit_args=(
+    ray job submit
+    --working-dir "$workdir"
+    --runtime-env-json "$runtime_env"
+  )
+  [[ -n "$name" ]] && submit_args+=(--submission-id "${name}-$(date +%s)")
+  submit_args+=("${passthrough[@]}")
+  submit_args+=(--)
+
+  # Build command prefix
+  [[ -n "$name" ]] && submit_args+=("NAME=${name}")
+  $use_dotenv && submit_args+=(dotenv run --)
+
+  submit_args+=("$@")
+
+  echo "+ ${submit_args[*]}"
+  "${submit_args[@]}"
+}
+# ---- /RAY_ALIASES ----
 BLOCK
 )"
   append_block_if_missing "$common_file" "$marker" "$block"
@@ -1199,6 +1311,7 @@ main() {
   install_uv
   ensure_cache_symlinks
   setup_uv_aliases
+  setup_ray_alias
 
   ensure_zsh_exists
   install_oh_my_zsh
