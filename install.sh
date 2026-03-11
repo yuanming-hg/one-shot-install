@@ -207,7 +207,7 @@ download_and_run() {
     return 1
   fi
 
-  bash "$tmpscript" "$@"
+  bash "$tmpscript" "$@" < /dev/null
   local rc=$?
   rm -f "$tmpscript"
   trap - RETURN
