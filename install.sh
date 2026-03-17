@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-INSTALL_VERSION="1.2.0"
+INSTALL_VERSION="1.2.1"
 INSTALL_STATE_DIR="${HOME}/.config/shell"
 INSTALL_STATE_FILE="${INSTALL_STATE_DIR}/install-version"
 
@@ -311,6 +311,10 @@ setup_shared_shell_config() {
 
 # user local bins (uv installs here by default)
 export PATH="$HOME/.local/bin:$PATH"
+
+# pnpm (standalone install location)
+export PNPM_HOME="$HOME/.local/share/pnpm"
+case ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac
 
 # nvm (installed by this script)
 export NVM_DIR="$HOME/.nvm"
@@ -846,6 +850,7 @@ ensure_cache_symlinks() {
     huggingface
     torch
     npm
+    pnpm
     yarn
     go-build
     go/mod
@@ -1113,6 +1118,36 @@ install_nvm_and_node() {
   fi
 }
 
+install_pnpm() {
+  if need_cmd pnpm; then
+    log "pnpm already installed: $(pnpm --version)"
+    return 0
+  fi
+
+  # corepack ships with Node >= 16.13; preferred method
+  if need_cmd corepack; then
+    log "Enabling pnpm via corepack..."
+    corepack enable pnpm || { warn "corepack enable pnpm failed; falling back to standalone install."; }
+  fi
+
+  # Verify or fall back to standalone installer
+  if ! need_cmd pnpm; then
+    log "Installing pnpm via standalone script..."
+    need_cmd curl || { err "curl not available; cannot install pnpm."; return 1; }
+    download_and_run "https://get.pnpm.io/install.sh"
+  fi
+
+  # Add pnpm home to PATH for this session
+  export PNPM_HOME="${HOME}/.local/share/pnpm"
+  [[ ":$PATH:" != *":$PNPM_HOME:"* ]] && export PATH="$PNPM_HOME:$PATH"
+
+  if need_cmd pnpm; then
+    log "pnpm installed: $(pnpm --version)"
+  else
+    warn "pnpm not available in this session; open a new shell to use it."
+  fi
+}
+
 enable_bash_to_zsh_handoff() {
   local bashrc="${HOME}/.bashrc"
   touch "$bashrc"
@@ -1346,6 +1381,7 @@ main() {
   install_oh_my_tmux
   install_tmux_local_config
   install_nvm_and_node
+  install_pnpm
   install_yazi
   install_wezterm
   enable_bash_to_zsh_handoff
@@ -1368,6 +1404,7 @@ main() {
   echo "  2) Verify:"
   echo "     - uv --version"
   echo "     - node -v && npm -v"
+  echo "     - pnpm --version"
   echo "     - zsh --version"
   echo "     - tmux -V (if installed)"
   echo "     - yazi --version"
