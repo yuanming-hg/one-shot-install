@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-04-28
+
+### Fixed
+
+- **Critical**: static/musl-linked zsh binary causes broken colors and garbled input (doubled characters) on glibc hosts due to missing terminfo support
+
+### Added
+
+- `_install_zsh_from_deb()` — fallback installer that extracts zsh + zsh-common from Ubuntu jammy `.deb` packages into `~/.local/` when no system zsh or sudo is available
+- `_validate_zsh_binary()` — detects and rejects static/musl zsh builds via `file(1)`
+- `_write_zsh_local_env()` — generates `~/.zshenv` with `MODULE_PATH` and `fpath` pointing to extracted support files
+- Musl zsh binary backed up as `~/.local/bin/zsh.musl.bak` before replacement
+
 ## [1.1.0] - 2026-02-23
 
 ### Added

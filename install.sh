@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-INSTALL_VERSION="1.2.1"
+INSTALL_VERSION="1.3.0"
 INSTALL_STATE_DIR="${HOME}/.config/shell"
 INSTALL_STATE_FILE="${INSTALL_STATE_DIR}/install-version"
 
@@ -867,12 +867,206 @@ ensure_cache_symlinks() {
 
 ensure_zsh_exists() {
   if need_cmd zsh; then
-    log "zsh found: $(command -v zsh)"
+    _validate_zsh_binary "$(command -v zsh)" && return 0
+  fi
+  warn "zsh not found (or broken). Trying to install without password..."
+  try_install_pkgs_no_password zsh
+  if need_cmd zsh && _validate_zsh_binary "$(command -v zsh)"; then
     return 0
   fi
-  warn "zsh not found. Trying to install without password..."
-  try_install_pkgs_no_password zsh
-  need_cmd zsh || { err "zsh is required but couldn't be installed without admin rights."; return 1; }
+
+  # Fallback: extract zsh from Ubuntu .deb packages into ~/.local/
+  if [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]]; then
+    _install_zsh_from_deb && return 0
+  fi
+
+  err "zsh is required but couldn't be installed."; return 1
+}
+
+_validate_zsh_binary() {
+  local zsh_bin="$1"
+  if [[ ! -x "$zsh_bin" ]]; then
+    return 1
+  fi
+  # Reject static/musl builds — they can't read system terminfo, causing
+  # broken colors and garbled input (doubled characters) on glibc hosts.
+  if need_cmd file; then
+    local desc
+    desc="$(file -b "$zsh_bin" 2>/dev/null || true)"
+    if [[ "$desc" == *"static"* || "$desc" == *"musl"* ]]; then
+      warn "zsh at $zsh_bin is a static/musl build (broken terminfo). Will replace."
+      return 1
+    fi
+  fi
+  return 0
+}
+
+_install_zsh_from_deb() {
+  log "Installing zsh from Ubuntu .deb packages (no sudo required)"
+
+  local arch="amd64"
+  local mirror="http://archive.ubuntu.com/ubuntu"
+  local suite="jammy"   # Ubuntu 22.04
+  local zsh_deb="zsh_5.8.1-1_${arch}.deb"
+  local common_deb="zsh-common_5.8.1-1_all.deb"
+  local zsh_url="${mirror}/pool/main/z/zsh/${zsh_deb}"
+  local common_url="${mirror}/pool/main/z/zsh/${common_deb}"
+
+  local tmpdir
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/zsh-install.XXXXXX")"
+
+  local ok=true
+  download_to "$zsh_url" "${tmpdir}/${zsh_deb}" || ok=false
+  download_to "$common_url" "${tmpdir}/${common_deb}" || ok=false
+
+  if ! $ok; then
+    warn "Failed to download zsh .deb packages."
+    rm -rf "$tmpdir"
+    return 1
+  fi
+
+  # Extract .deb (ar archive → data.tar.xz → files)
+  local extract="${tmpdir}/extract"
+  mkdir -p "$extract"
+
+  need_cmd ar || { warn "ar not found, cannot extract .deb."; rm -rf "$tmpdir"; return 1; }
+
+  for deb in "${tmpdir}/${zsh_deb}" "${tmpdir}/${common_deb}"; do
+    local deb_tmp="${tmpdir}/deb_tmp"
+    mkdir -p "$deb_tmp"
+    (cd "$deb_tmp" && ar x "$deb")
+    # data archive can be .tar.xz, .tar.zst, or .tar.gz
+    local data_tar
+    data_tar="$(ls "${deb_tmp}"/data.tar.* 2>/dev/null | head -1)"
+    if [[ -z "$data_tar" ]]; then
+      warn "No data.tar.* in $(basename "$deb")."
+      rm -rf "$tmpdir"
+      return 1
+    fi
+    tar -xf "$data_tar" -C "$extract"
+    rm -rf "$deb_tmp"
+  done
+
+  # Install binary (Ubuntu zsh .deb puts it at ./bin/zsh, not ./usr/bin/zsh)
+  mkdir -p "${HOME}/.local/bin"
+  local zsh_bin=""
+  for candidate in "${extract}/bin/zsh" "${extract}/usr/bin/zsh"; do
+    [[ -f "$candidate" ]] && { zsh_bin="$candidate"; break; }
+  done
+  if [[ -z "$zsh_bin" ]]; then
+    warn "zsh binary not found in extracted .deb."
+    rm -rf "$tmpdir"
+    return 1
+  fi
+  # Back up existing musl binary if present
+  [[ -f "${HOME}/.local/bin/zsh" ]] && mv "${HOME}/.local/bin/zsh" "${HOME}/.local/bin/zsh.musl.bak"
+  cp "$zsh_bin" "${HOME}/.local/bin/zsh"
+  chmod +x "${HOME}/.local/bin/zsh"
+
+  # Install support files (functions, modules)
+  local zsh_lib="${HOME}/.local/share/zsh-system"
+  rm -rf "$zsh_lib"
+  mkdir -p "$zsh_lib"
+  [[ -d "${extract}/usr/share/zsh" ]] && cp -r "${extract}/usr/share/zsh" "${zsh_lib}/share"
+  [[ -d "${extract}/usr/lib" ]]       && cp -r "${extract}/usr/lib" "${zsh_lib}/lib"
+
+  # Create .zshenv so zsh finds its functions and modules
+  _write_zsh_local_env "$zsh_lib"
+
+  rm -rf "$tmpdir"
+
+  # Ensure ~/.local/bin is on PATH for the rest of this session
+  case ":$PATH:" in
+    *":${HOME}/.local/bin:"*) ;;
+    *) export PATH="${HOME}/.local/bin:${PATH}" ;;
+  esac
+
+  if need_cmd zsh; then
+    log "zsh installed to ~/.local/bin/zsh (from Ubuntu ${suite} .deb)"
+    return 0
+  fi
+  warn "zsh binary installed but not functional."
+  return 1
+}
+
+_write_zsh_local_env() {
+  local zsh_lib="$1"
+  local zshenv="${HOME}/.zshenv"
+  local marker="ZSH_LOCAL_SUPPORT_FILES"
+
+  if grep -Fq "$marker" "$zshenv" 2>/dev/null; then
+    log ".zshenv already has zsh-local support paths."
+    return 0
+  fi
+
+  local share_dir="${zsh_lib}/share"
+  local lib_dir="${zsh_lib}/lib"
+
+  # Build fpath from all function subdirectories
+  local fpath_entries=""
+  if [[ -d "$share_dir" ]]; then
+    while IFS= read -r dir; do
+      fpath_entries="${fpath_entries}  ${dir}"$'\n'
+    done < <(find "$share_dir" -type d | sort)
+  fi
+
+  local block
+  block="$(cat <<ZSHENVEOF
+# ---- ${marker} ----
+# glibc zsh support files (extracted from Ubuntu .deb, no system package)
+_zsys="${zsh_lib}"
+ZSHENVEOF
+)"
+
+  # MODULE_PATH: directory containing *.so files (e.g. zle.so, computil.so)
+  # Layout: lib/x86_64-linux-gnu/zsh/5.8.1/zsh/*.so
+  local mod_dir
+  mod_dir="$(find "$lib_dir" -name 'zle.so' -type f 2>/dev/null | head -1)"
+  if [[ -n "$mod_dir" ]]; then
+    mod_dir="$(dirname "$mod_dir")"
+    block="${block}"$'\n'"export MODULE_PATH=\"${mod_dir}\""
+  fi
+
+  # Build fpath array from all function subdirectories
+  # After cp -r, layout is share/functions/ (not share/zsh/functions/)
+  local func_base
+  if [[ -d "${share_dir}/zsh/functions" ]]; then
+    func_base="${share_dir}/zsh/functions"
+  elif [[ -d "${share_dir}/functions" ]]; then
+    func_base="${share_dir}/functions"
+  else
+    func_base=""
+  fi
+  block="${block}"$'\n'"fpath=("
+  if [[ -n "$func_base" ]]; then
+    while IFS= read -r dir; do
+      block="${block}"$'\n'"  ${dir}"
+    done < <(find "$func_base" -type d | sort)
+  fi
+  # Also add version-specific dir and site/vendor dirs
+  for extra_pattern in "${share_dir}/5"*/functions "${share_dir}/zsh/5"*/functions \
+                       "${share_dir}/site-functions" "${share_dir}/zsh/site-functions" \
+                       "${share_dir}/vendor-completions" "${share_dir}/zsh/vendor-completions"; do
+    for extra in $extra_pattern; do
+      [[ -d "$extra" ]] && block="${block}"$'\n'"  ${extra}"
+    done
+  done
+  block="${block}"$'\n'"  \$fpath"
+  block="${block}"$'\n'")"
+  block="${block}"$'\n'"unset _zsys"
+  block="${block}"$'\n'"# ---- /${marker} ----"
+
+  # Prepend to .zshenv (must run before .zshrc)
+  if [[ -f "$zshenv" ]]; then
+    local tmp
+    tmp="$(mktemp "${zshenv}.XXXXXX")"
+    printf "%s\n\n" "$block" > "$tmp"
+    cat "$zshenv" >> "$tmp"
+    mv "$tmp" "$zshenv"
+  else
+    printf "%s\n" "$block" > "$zshenv"
+  fi
+  log "Created ~/.zshenv with zsh function paths."
 }
 
 install_oh_my_zsh() {
