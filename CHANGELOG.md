@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-13
+
+### Added
+
+- `install_gh()` — GitHub CLI with brew (macOS), apt/dnf (Linux), and versioned GitHub release tarball fallback for Linux hosts without sudo
+- Pinned version: `GH_VERSION=2.96.0`
+- gh entry in `--check` dry-run mode
+- gh in post-install verification summary (prompts to run `gh auth login`)
+
 ## [1.3.0] - 2026-04-28
 
 ### Fixed

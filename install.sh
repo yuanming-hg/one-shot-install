@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-INSTALL_VERSION="1.3.0"
+INSTALL_VERSION="1.4.0"
 INSTALL_STATE_DIR="${HOME}/.config/shell"
 INSTALL_STATE_FILE="${INSTALL_STATE_DIR}/install-version"
 
@@ -31,6 +31,7 @@ ZSH_SYNTAX_HL_TAG="0.8.0"
 YAZI_VERSION="v26.1.22"
 WEZTERM_VERSION="20240203-110809-5046fc22"
 CHAFA_VERSION="1.18.1"
+GH_VERSION="2.96.0"
 
 # Flags (set by parse_args)
 CHECK_MODE=false
@@ -785,6 +786,61 @@ install_wezterm() {
   log "wezterm AppImage installed to ~/.local/bin/wezterm"
 }
 
+install_gh() {
+  if need_cmd gh; then
+    log "gh already installed: $(gh --version 2>/dev/null | head -1)"
+    return 0
+  fi
+
+  # macOS: brew
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    if need_cmd brew; then
+      log "Installing gh via brew"
+      brew install gh >/dev/null || warn "brew install gh failed (continuing)."
+    else
+      warn "Homebrew not found. Skipping gh."
+    fi
+    return 0
+  fi
+
+  # Linux with sudo: try package manager first
+  if have_passwordless_sudo; then
+    if need_cmd apt-get; then
+      sudo -n apt-get install -y gh >/dev/null 2>&1 && { log "gh installed via apt."; return 0; } || true
+    elif need_cmd dnf; then
+      sudo -n dnf install -y gh >/dev/null 2>&1 && { log "gh installed via dnf."; return 0; } || true
+    fi
+  fi
+
+  # Binary download (no sudo needed) — asset names are versioned, e.g.
+  # gh_2.96.0_linux_amd64.tar.gz, not gh_linux_amd64.tar.gz
+  local arch target_arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)         target_arch="amd64" ;;
+    aarch64|arm64)  target_arch="arm64" ;;
+    *)              warn "Unsupported architecture for gh: $arch. Skipping."; return 0 ;;
+  esac
+
+  log "Installing gh ${GH_VERSION} from GitHub release"
+  local target="gh_${GH_VERSION}_linux_${target_arch}"
+  local url="https://github.com/cli/cli/releases/download/v${GH_VERSION}/${target}.tar.gz"
+  local tmpdir
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/gh-install.XXXXXX")"
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  download_to "$url" "${tmpdir}/gh.tar.gz"
+  tar -xzf "${tmpdir}/gh.tar.gz" -C "$tmpdir"
+
+  mkdir -p "${HOME}/.local/bin"
+  cp "${tmpdir}/${target}/bin/gh" "${HOME}/.local/bin/gh"
+  chmod +x "${HOME}/.local/bin/gh"
+
+  rm -rf "$tmpdir"
+  trap - RETURN
+  log "gh ${GH_VERSION} installed to ~/.local/bin/ (run 'gh auth login' to authenticate)"
+}
+
 # ---------------------------------------------------------------------------
 # Cache symlink management
 # Local drive is small (128G). Move heavy caches to /local and symlink back.
@@ -1018,12 +1074,14 @@ _zsys="${zsh_lib}"
 ZSHENVEOF
 )"
 
-  # MODULE_PATH: directory containing *.so files (e.g. zle.so, computil.so)
-  # Layout: lib/x86_64-linux-gnu/zsh/5.8.1/zsh/*.so
+  # MODULE_PATH: zsh loads "zsh/parameter" by appending "zsh/parameter.so" to
+  # MODULE_PATH, so MODULE_PATH must be the *parent* of the dir containing *.so.
+  # Layout: lib/x86_64-linux-gnu/zsh/5.8.1/zsh/*.so → MODULE_PATH = .../5.8.1
   local mod_dir
   mod_dir="$(find "$lib_dir" -name 'zle.so' -type f 2>/dev/null | head -1)"
   if [[ -n "$mod_dir" ]]; then
-    mod_dir="$(dirname "$mod_dir")"
+    mod_dir="$(dirname "$mod_dir")"   # .../5.8.1/zsh
+    mod_dir="$(dirname "$mod_dir")"   # .../5.8.1
     block="${block}"$'\n'"export MODULE_PATH=\"${mod_dir}\""
   fi
 
@@ -1396,6 +1454,7 @@ run_check_mode() {
     "nvm:${HOME}/.nvm/nvm.sh"
     "yazi:yazi"
     "wezterm:wezterm"
+    "gh:gh"
   )
 
   for entry in "${checks[@]}"; do
@@ -1578,6 +1637,7 @@ main() {
   install_pnpm
   install_yazi
   install_wezterm
+  install_gh
   enable_bash_to_zsh_handoff
   fix_line_endings
 
@@ -1603,6 +1663,7 @@ main() {
   echo "     - tmux -V (if installed)"
   echo "     - yazi --version"
   echo "     - wezterm --version"
+  echo "     - gh --version (then: gh auth login)"
   echo "  3) If you didn't provide a p10k config, run: p10k configure"
 }
 
