@@ -168,7 +168,14 @@ replace_line_if_present() {
   local tmp
   tmp="$(mktemp "${file}.XXXXXX")"
   trap 'rm -f "$tmp"' RETURN
-  awk -v old="$old" -v new="$new" '$0==old{print new; next} {print}' "$file" > "$tmp"
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$old" ]]; then
+      printf '%s\n' "$new"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$file" > "$tmp"
   mv "$tmp" "$file"
   trap - RETURN
   log "Patched line in $file"
