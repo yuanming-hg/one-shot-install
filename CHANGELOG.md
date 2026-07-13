@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-07-13
+
+### Added
+
+- `install_ffmpeg()` — ffmpeg CLI with package-manager-first install (brew/apt/dnf/pacman via `try_install_pkgs_no_password`), johnvansickle.com static-binary fallback for sudo-less Linux hosts (amd64/arm64)
+- ffmpeg entry in `--check` dry-run mode
+- ffmpeg in post-install verification summary
+- yazi's `ffmpeg` optional-dep check simplified — `install_ffmpeg` now runs first in `main()`, so yazi's own check is a no-op by the time it runs
+
 ## [1.4.0] - 2026-07-13
 
 ### Added
