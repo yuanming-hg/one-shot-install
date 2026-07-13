@@ -368,6 +368,16 @@ setup_shared_shell_config() {
     cat > "$common_file" <<'EOF'
 # Shared shell config sourced by both bash and zsh.
 
+# ---- COMMON_SH_GUARD ----
+# Avoid double-sourcing: this file is sourced directly by zsh, and again via
+# the bash-compat shim when zsh sources ~/.bashrc. Re-running the nvm block
+# below on every duplicate source is expensive (nvm's default auto-use).
+if [ -n "${_ONESHOT_COMMON_SH_LOADED:-}" ]; then
+  return
+fi
+_ONESHOT_COMMON_SH_LOADED=1
+# ---- /COMMON_SH_GUARD ----
+
 # user local bins (uv installs here by default)
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -379,11 +389,21 @@ case ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
   # shellcheck disable=SC1090
-  . "$NVM_DIR/nvm.sh"
+  . "$NVM_DIR/nvm.sh" --no-use
 fi
 EOF
   else
-    log "Shared shell config exists: $common_file (leaving as-is)"
+    log "Shared shell config exists: $common_file (patching known issues)"
+    prepend_block_if_missing "$common_file" "COMMON_SH_GUARD" "$(cat <<'BLOCK'
+# ---- COMMON_SH_GUARD ----
+if [ -n "${_ONESHOT_COMMON_SH_LOADED:-}" ]; then
+  return
+fi
+_ONESHOT_COMMON_SH_LOADED=1
+# ---- /COMMON_SH_GUARD ----
+BLOCK
+)"
+    replace_line_if_present "$common_file" '  . "$NVM_DIR/nvm.sh"' '  . "$NVM_DIR/nvm.sh" --no-use'
   fi
 
   append_if_missing "${HOME}/.bash_profile" '[[ -f ~/.bashrc ]] && . ~/.bashrc'
