@@ -1355,6 +1355,9 @@ install_p10k_and_plugins() {
     local clone_args=(--depth=1)
     [[ -n "$tag" ]] && clone_args+=(--branch "$tag")
     git -c core.autocrlf=false clone "${clone_args[@]}" "$repo" "$dir"
+    # zsh's compaudit refuses to load completions from group/other-writable
+    # directories — don't inherit a permissive ambient umask.
+    chmod g-w,o-w "$dir" 2>/dev/null || true
   }
 
   _ensure_clone "$zsh_custom/themes/powerlevel10k" \
@@ -1406,6 +1409,20 @@ EOF
 
   # Add tmux + JetBrains/JediTerm fix block to ~/.zshrc
   add_tmux_jediterm_fix_to_zshrc
+}
+
+# zsh refuses to load completions from group/other-writable directories in
+# $fpath — a real, recurring nuisance on shared servers with permissive
+# umasks. Mirror oh-my-zsh's own suggested remedy (compaudit | xargs chmod).
+fix_completion_dir_perms() {
+  need_cmd zsh || return 0
+  local insecure
+  insecure="$(zsh -ic 'autoload -Uz compaudit; compaudit' 2>/dev/null || true)"
+  [[ -n "$insecure" ]] || return 0
+  log "Fixing group/other-writable zsh completion directories"
+  while IFS= read -r d; do
+    [[ -n "$d" ]] && chmod g-w,o-w "$d" 2>/dev/null || true
+  done <<< "$insecure"
 }
 
 install_oh_my_tmux() {
@@ -1779,6 +1796,7 @@ main() {
   ensure_zsh_exists
   install_oh_my_zsh
   install_p10k_and_plugins
+  fix_completion_dir_perms
   install_oh_my_tmux
   install_tmux_local_config
   install_nvm_and_node
