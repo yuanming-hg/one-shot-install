@@ -100,6 +100,28 @@ append_block_if_missing() {
   printf "\n%s\n" "$block" >> "$file"
 }
 
+# Prepend a multi-line block once, guarded by a marker string (inserted at
+# the TOP of the file — append_block_if_missing can't prevent re-execution
+# of content that already ran before it)
+prepend_block_if_missing() {
+  local file="$1"
+  local marker="$2"
+  local block="$3"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || true
+  touch "$file"
+  if grep -Fq "$marker" "$file"; then
+    log "Block already present in $file ($marker)"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  printf "%s\n" "$block" > "$tmp"
+  cat "$file" >> "$tmp"
+  mv "$tmp" "$file"
+  trap - RETURN
+}
+
 # Replace a marker-delimited block in a file (P0-#6)
 replace_block() {
   local file="$1"
@@ -136,6 +158,35 @@ replace_block() {
 
   mv "$tmp" "$file"
   trap - RETURN
+}
+
+# Replace an exact line with a new one, if the old one is present verbatim
+replace_line_if_present() {
+  local file="$1" old="$2" new="$3"
+  [[ -f "$file" ]] || return 0
+  grep -Fqx "$old" "$file" || return 0
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  awk -v old="$old" -v new="$new" '$0==old{print new; next} {print}' "$file" > "$tmp"
+  mv "$tmp" "$file"
+  trap - RETURN
+  log "Patched line in $file"
+}
+
+# Remove an exact line if present (used to strip lines a third-party
+# installer added that we no longer want)
+remove_line_if_present() {
+  local file="$1" line="$2"
+  [[ -f "$file" ]] || return 0
+  grep -Fqx "$line" "$file" || return 0
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  grep -Fvx "$line" "$file" > "$tmp" || true
+  mv "$tmp" "$file"
+  trap - RETURN
+  log "Removed redundant line from $file"
 }
 
 download_to() {
