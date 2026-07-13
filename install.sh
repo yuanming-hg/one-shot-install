@@ -1490,8 +1490,21 @@ install_nvm_and_node() {
     need_cmd curl || try_install_pkgs_no_password curl
     need_cmd curl || { err "curl not available; cannot install nvm."; return 1; }
     # Use pinned NVM_VERSION and download_and_run (P1-#15, P1-#9)
-    download_and_run "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+    # PROFILE=/dev/null: skip nvm's own rc-file modification — common.sh
+    # (sourced by both bash and zsh) already loads nvm; letting nvm's
+    # installer also append its own block to ~/.bashrc double-sources it
+    # every shell. Verified against nvm v0.40.4's install.sh source: this
+    # is the officially-documented mechanism to skip profile modification.
+    PROFILE=/dev/null download_and_run "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
   fi
+
+  # Repair: strip nvm's self-appended block from ~/.bashrc if a prior
+  # install (or manual nvm install) added it before this fix existed.
+  # Exact-match against nvm v0.40.4's literal SOURCE_STR/COMPLETION_STR
+  # output — runs on every install.sh execution, not just fresh installs.
+  remove_line_if_present "${HOME}/.bashrc" 'export NVM_DIR="$HOME/.nvm"'
+  remove_line_if_present "${HOME}/.bashrc" '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm'
+  remove_line_if_present "${HOME}/.bashrc" '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion'
 
   export NVM_DIR="$nvm_dir"
   [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
