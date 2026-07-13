@@ -15,7 +15,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-INSTALL_VERSION="1.4.0"
+INSTALL_VERSION="1.4.1"
 INSTALL_STATE_DIR="${HOME}/.config/shell"
 INSTALL_STATE_FILE="${INSTALL_STATE_DIR}/install-version"
 
@@ -100,6 +100,28 @@ append_block_if_missing() {
   printf "\n%s\n" "$block" >> "$file"
 }
 
+# Prepend a multi-line block once, guarded by a marker string (inserted at
+# the TOP of the file — append_block_if_missing can't prevent re-execution
+# of content that already ran before it)
+prepend_block_if_missing() {
+  local file="$1"
+  local marker="$2"
+  local block="$3"
+  mkdir -p "$(dirname "$file")" 2>/dev/null || true
+  touch "$file"
+  if grep -Fq "$marker" "$file"; then
+    log "Block already present in $file ($marker)"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  printf "%s\n" "$block" > "$tmp"
+  cat "$file" >> "$tmp"
+  mv "$tmp" "$file"
+  trap - RETURN
+}
+
 # Replace a marker-delimited block in a file (P0-#6)
 replace_block() {
   local file="$1"
@@ -136,6 +158,42 @@ replace_block() {
 
   mv "$tmp" "$file"
   trap - RETURN
+}
+
+# Replace an exact line with a new one, if the old one is present verbatim
+replace_line_if_present() {
+  local file="$1" old="$2" new="$3"
+  [[ -f "$file" ]] || return 0
+  grep -Fqx "$old" "$file" || return 0
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$old" ]]; then
+      printf '%s\n' "$new"
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$file" > "$tmp"
+  mv "$tmp" "$file"
+  trap - RETURN
+  log "Patched line in $file"
+}
+
+# Remove an exact line if present (used to strip lines a third-party
+# installer added that we no longer want)
+remove_line_if_present() {
+  local file="$1" line="$2"
+  [[ -f "$file" ]] || return 0
+  grep -Fqx "$line" "$file" || return 0
+  local tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  trap 'rm -f "$tmp"' RETURN
+  grep -Fvx "$line" "$file" > "$tmp" || true
+  mv "$tmp" "$file"
+  trap - RETURN
+  log "Removed redundant line from $file"
 }
 
 download_to() {
@@ -310,6 +368,16 @@ setup_shared_shell_config() {
     cat > "$common_file" <<'EOF'
 # Shared shell config sourced by both bash and zsh.
 
+# ---- COMMON_SH_GUARD ----
+# Avoid double-sourcing: this file is sourced directly by zsh, and again via
+# the bash-compat shim when zsh sources ~/.bashrc. Re-running the nvm block
+# below on every duplicate source is expensive (nvm's default auto-use).
+if [ -n "${_ONESHOT_COMMON_SH_LOADED:-}" ]; then
+  return
+fi
+_ONESHOT_COMMON_SH_LOADED=1
+# ---- /COMMON_SH_GUARD ----
+
 # user local bins (uv installs here by default)
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -321,11 +389,21 @@ case ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
   # shellcheck disable=SC1090
-  . "$NVM_DIR/nvm.sh"
+  . "$NVM_DIR/nvm.sh" --no-use
 fi
 EOF
   else
-    log "Shared shell config exists: $common_file (leaving as-is)"
+    log "Shared shell config exists: $common_file (patching known issues)"
+    prepend_block_if_missing "$common_file" "COMMON_SH_GUARD" "$(cat <<'BLOCK'
+# ---- COMMON_SH_GUARD ----
+if [ -n "${_ONESHOT_COMMON_SH_LOADED:-}" ]; then
+  return
+fi
+_ONESHOT_COMMON_SH_LOADED=1
+# ---- /COMMON_SH_GUARD ----
+BLOCK
+)"
+    replace_line_if_present "$common_file" '  . "$NVM_DIR/nvm.sh"' '  . "$NVM_DIR/nvm.sh" --no-use'
   fi
 
   append_if_missing "${HOME}/.bash_profile" '[[ -f ~/.bashrc ]] && . ~/.bashrc'
@@ -656,7 +734,9 @@ install_yazi() {
   fi
 
   # Optional dependencies for media preview
-  local yazi_opt_deps=(ffmpeg chafa)
+  # ffmpeg is installed separately by install_ffmpeg() (called before this
+  # function in main()) — only chafa needs this fallback path.
+  local yazi_opt_deps=(chafa)
   local missing_opt=()
   for dep in "${yazi_opt_deps[@]}"; do
     need_cmd "$dep" || missing_opt+=("$dep")
@@ -839,6 +919,66 @@ install_gh() {
   rm -rf "$tmpdir"
   trap - RETURN
   log "gh ${GH_VERSION} installed to ~/.local/bin/ (run 'gh auth login' to authenticate)"
+}
+
+install_ffmpeg() {
+  if need_cmd ffmpeg; then
+    log "ffmpeg already installed: $(ffmpeg -version 2>/dev/null | head -1)"
+    return 0
+  fi
+
+  # Package manager covers macOS (brew) and Linux-with-passwordless-sudo
+  # (apt/dnf/pacman) in one call — package name is "ffmpeg" everywhere.
+  try_install_pkgs_no_password ffmpeg
+
+  if need_cmd ffmpeg; then
+    log "ffmpeg installed via package manager."
+    return 0
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    warn "Homebrew unavailable/failed. Skipping ffmpeg."
+    return 0
+  fi
+
+  # No-sudo Linux fallback: static binary (self-contained, no shared libs
+  # needed). This URL is a rolling pointer to upstream's current stable
+  # static build (currently 7.0.2) — not version-pinned. See Global
+  # Constraints in the implementation plan for why.
+  local arch target_arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)         target_arch="amd64" ;;
+    aarch64|arm64)  target_arch="arm64" ;;
+    *)              warn "Unsupported architecture for ffmpeg: $arch. Skipping."; return 0 ;;
+  esac
+
+  log "Installing ffmpeg (static build) from johnvansickle.com"
+  local url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${target_arch}-static.tar.xz"
+  local tmpdir
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ffmpeg-install.XXXXXX")"
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  download_to "$url" "${tmpdir}/ffmpeg.tar.xz"
+  tar -xJf "${tmpdir}/ffmpeg.tar.xz" -C "$tmpdir"
+
+  local extracted_dir
+  extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -name 'ffmpeg-*-static')"
+  if [[ -z "$extracted_dir" ]]; then
+    warn "ffmpeg static-binary archive had unexpected layout (johnvansickle.com may have changed it). Skipping."
+    rm -rf "$tmpdir"
+    trap - RETURN
+    return 0
+  fi
+
+  mkdir -p "${HOME}/.local/bin"
+  cp "${extracted_dir}/ffmpeg" "${HOME}/.local/bin/ffmpeg"
+  cp "${extracted_dir}/ffprobe" "${HOME}/.local/bin/ffprobe"
+  chmod +x "${HOME}/.local/bin/ffmpeg" "${HOME}/.local/bin/ffprobe"
+
+  rm -rf "$tmpdir"
+  trap - RETURN
+  log "ffmpeg installed to ~/.local/bin/ ($("${HOME}/.local/bin/ffmpeg" -version 2>/dev/null | head -1))"
 }
 
 # ---------------------------------------------------------------------------
@@ -1221,6 +1361,9 @@ install_p10k_and_plugins() {
     local clone_args=(--depth=1)
     [[ -n "$tag" ]] && clone_args+=(--branch "$tag")
     git -c core.autocrlf=false clone "${clone_args[@]}" "$repo" "$dir"
+    # zsh's compaudit refuses to load completions from group/other-writable
+    # directories — don't inherit a permissive ambient umask.
+    chmod g-w,o-w "$dir" 2>/dev/null || true
   }
 
   _ensure_clone "$zsh_custom/themes/powerlevel10k" \
@@ -1272,6 +1415,20 @@ EOF
 
   # Add tmux + JetBrains/JediTerm fix block to ~/.zshrc
   add_tmux_jediterm_fix_to_zshrc
+}
+
+# zsh refuses to load completions from group/other-writable directories in
+# $fpath — a real, recurring nuisance on shared servers with permissive
+# umasks. Mirror oh-my-zsh's own suggested remedy (compaudit | xargs chmod).
+fix_completion_dir_perms() {
+  need_cmd zsh || return 0
+  local insecure
+  insecure="$(zsh -ic 'autoload -Uz compaudit; compaudit' 2>/dev/null || true)"
+  [[ -n "$insecure" ]] || return 0
+  log "Fixing group/other-writable zsh completion directories"
+  while IFS= read -r d; do
+    [[ -n "$d" ]] && chmod g-w,o-w "$d" 2>/dev/null || true
+  done <<< "$insecure"
 }
 
 install_oh_my_tmux() {
@@ -1356,8 +1513,21 @@ install_nvm_and_node() {
     need_cmd curl || try_install_pkgs_no_password curl
     need_cmd curl || { err "curl not available; cannot install nvm."; return 1; }
     # Use pinned NVM_VERSION and download_and_run (P1-#15, P1-#9)
-    download_and_run "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+    # PROFILE=/dev/null: skip nvm's own rc-file modification — common.sh
+    # (sourced by both bash and zsh) already loads nvm; letting nvm's
+    # installer also append its own block to ~/.bashrc double-sources it
+    # every shell. Verified against nvm v0.40.4's install.sh source: this
+    # is the officially-documented mechanism to skip profile modification.
+    PROFILE=/dev/null download_and_run "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
   fi
+
+  # Repair: strip nvm's self-appended block from ~/.bashrc if a prior
+  # install (or manual nvm install) added it before this fix existed.
+  # Exact-match against nvm v0.40.4's literal SOURCE_STR/COMPLETION_STR
+  # output — runs on every install.sh execution, not just fresh installs.
+  remove_line_if_present "${HOME}/.bashrc" 'export NVM_DIR="$HOME/.nvm"'
+  remove_line_if_present "${HOME}/.bashrc" '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm'
+  remove_line_if_present "${HOME}/.bashrc" '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion'
 
   export NVM_DIR="$nvm_dir"
   [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
@@ -1452,6 +1622,7 @@ run_check_mode() {
     "zsh-syntax-highlighting:${HOME}/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting"
     "oh-my-tmux:${HOME}/.config/tmux/tmux.conf"
     "nvm:${HOME}/.nvm/nvm.sh"
+    "ffmpeg:ffmpeg"
     "yazi:yazi"
     "wezterm:wezterm"
     "gh:gh"
@@ -1631,10 +1802,12 @@ main() {
   ensure_zsh_exists
   install_oh_my_zsh
   install_p10k_and_plugins
+  fix_completion_dir_perms
   install_oh_my_tmux
   install_tmux_local_config
   install_nvm_and_node
   install_pnpm
+  install_ffmpeg
   install_yazi
   install_wezterm
   install_gh
@@ -1657,10 +1830,11 @@ main() {
   echo "  1) Open a NEW terminal (or run: source ~/.bashrc)"
   echo "  2) Verify:"
   echo "     - uv --version"
-  echo "     - node -v && npm -v"
+  echo "     - nvm use default && node -v && npm -v   (nvm no longer auto-activates a version per shell — see CHANGELOG)"
   echo "     - pnpm --version"
   echo "     - zsh --version"
   echo "     - tmux -V (if installed)"
+  echo "     - ffmpeg -version"
   echo "     - yazi --version"
   echo "     - wezterm --version"
   echo "     - gh --version (then: gh auth login)"
