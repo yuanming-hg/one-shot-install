@@ -841,6 +841,60 @@ install_gh() {
   log "gh ${GH_VERSION} installed to ~/.local/bin/ (run 'gh auth login' to authenticate)"
 }
 
+install_ffmpeg() {
+  if need_cmd ffmpeg; then
+    log "ffmpeg already installed: $(ffmpeg -version 2>/dev/null | head -1)"
+    return 0
+  fi
+
+  # Package manager covers macOS (brew) and Linux-with-passwordless-sudo
+  # (apt/dnf/pacman) in one call — package name is "ffmpeg" everywhere.
+  try_install_pkgs_no_password ffmpeg
+
+  if need_cmd ffmpeg; then
+    log "ffmpeg installed via package manager."
+    return 0
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    warn "Homebrew unavailable/failed. Skipping ffmpeg."
+    return 0
+  fi
+
+  # No-sudo Linux fallback: static binary (self-contained, no shared libs
+  # needed). This URL is a rolling pointer to upstream's current stable
+  # static build (currently 7.0.2) — not version-pinned. See Global
+  # Constraints in the implementation plan for why.
+  local arch target_arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64)         target_arch="amd64" ;;
+    aarch64|arm64)  target_arch="arm64" ;;
+    *)              warn "Unsupported architecture for ffmpeg: $arch. Skipping."; return 0 ;;
+  esac
+
+  log "Installing ffmpeg (static build) from johnvansickle.com"
+  local url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${target_arch}-static.tar.xz"
+  local tmpdir
+  tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/ffmpeg-install.XXXXXX")"
+  trap 'rm -rf "$tmpdir"' RETURN
+
+  download_to "$url" "${tmpdir}/ffmpeg.tar.xz"
+  tar -xJf "${tmpdir}/ffmpeg.tar.xz" -C "$tmpdir"
+
+  local extracted_dir
+  extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -name 'ffmpeg-*-static')"
+
+  mkdir -p "${HOME}/.local/bin"
+  cp "${extracted_dir}/ffmpeg" "${HOME}/.local/bin/ffmpeg"
+  cp "${extracted_dir}/ffprobe" "${HOME}/.local/bin/ffprobe"
+  chmod +x "${HOME}/.local/bin/ffmpeg" "${HOME}/.local/bin/ffprobe"
+
+  rm -rf "$tmpdir"
+  trap - RETURN
+  log "ffmpeg installed to ~/.local/bin/ ($("${HOME}/.local/bin/ffmpeg" -version 2>/dev/null | head -1))"
+}
+
 # ---------------------------------------------------------------------------
 # Cache symlink management
 # Local drive is small (128G). Move heavy caches to /local and symlink back.
