@@ -656,7 +656,9 @@ install_yazi() {
   fi
 
   # Optional dependencies for media preview
-  local yazi_opt_deps=(ffmpeg chafa)
+  # ffmpeg is installed separately by install_ffmpeg() (called before this
+  # function in main()) — only chafa needs this fallback path.
+  local yazi_opt_deps=(chafa)
   local missing_opt=()
   for dep in "${yazi_opt_deps[@]}"; do
     need_cmd "$dep" || missing_opt+=("$dep")
@@ -1689,6 +1691,7 @@ main() {
   install_tmux_local_config
   install_nvm_and_node
   install_pnpm
+  install_ffmpeg
   install_yazi
   install_wezterm
   install_gh
