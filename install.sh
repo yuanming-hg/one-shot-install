@@ -964,6 +964,12 @@ install_ffmpeg() {
 
   local extracted_dir
   extracted_dir="$(find "$tmpdir" -maxdepth 1 -type d -name 'ffmpeg-*-static')"
+  if [[ -z "$extracted_dir" ]]; then
+    warn "ffmpeg static-binary archive had unexpected layout (johnvansickle.com may have changed it). Skipping."
+    rm -rf "$tmpdir"
+    trap - RETURN
+    return 0
+  fi
 
   mkdir -p "${HOME}/.local/bin"
   cp "${extracted_dir}/ffmpeg" "${HOME}/.local/bin/ffmpeg"
@@ -1824,7 +1830,7 @@ main() {
   echo "  1) Open a NEW terminal (or run: source ~/.bashrc)"
   echo "  2) Verify:"
   echo "     - uv --version"
-  echo "     - node -v && npm -v"
+  echo "     - nvm use default && node -v && npm -v   (nvm no longer auto-activates a version per shell — see CHANGELOG)"
   echo "     - pnpm --version"
   echo "     - zsh --version"
   echo "     - tmux -V (if installed)"
