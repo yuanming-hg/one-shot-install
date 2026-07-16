@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-07-16
+
+### Fixed
+
+- **OSC 8 hyperlinks over ssh**: `tmux.config.local` advertised the `hyperlinks` terminal-feature only to `xterm*` and `WezTerm*` outer terminals. Over ssh the client TERM tmux sees is often `screen-256color` / `tmux-256color` / a non-`xterm*` value, so tmux stripped OSC 8 hyperlinks and links (e.g. from Claude Code) rendered as plain, unclickable text. Replaced the two specific patterns with a single wildcard `set -as terminal-features ',*:hyperlinks'` — verified working through WezTerm → ssh → tmux. Requires a tmux re-attach (or `--force` re-install) to take effect, since terminal capabilities are negotiated at client attach.
+
 ## [1.4.1] - 2026-07-13
 
 ### Added
