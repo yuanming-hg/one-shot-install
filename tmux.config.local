@@ -86,6 +86,35 @@ tmux_conf_24b_colour=auto
 tmux_conf_theme=enabled
 
 # default theme
+#
+# Two blocks, gated on $WEZTERM_THEME (exported by wezterm's bin/zsh-remap).
+# tmux reads this at SERVER start, so a theme flip only reaches a fresh server:
+# either close every tmux, or `tmux kill-server`. `source-file` alone won't do
+# it — %if is a parse-time directive and the env var is fixed per server.
+# Unset env falls through to dark, so hosts with no WezTerm are unaffected.
+%if "#{==:#{WEZTERM_THEME},light}"
+
+# Catppuccin Latte
+tmux_conf_theme_colour_1="#dce0e8"    # crust — status bg
+tmux_conf_theme_colour_2="#ccd0da"    # surface0
+tmux_conf_theme_colour_3="#8c8fa1"    # overlay1 — inactive fg / borders
+tmux_conf_theme_colour_4="#1e66f5"    # blue — accent
+tmux_conf_theme_colour_5="#df8e1d"    # yellow
+tmux_conf_theme_colour_6="#1c1b19"    # ink — text on a saturated accent
+tmux_conf_theme_colour_7="#4c4f69"    # text — main fg
+tmux_conf_theme_colour_8="#dce0e8"    # crust
+tmux_conf_theme_colour_9="#df8e1d"    # yellow
+tmux_conf_theme_colour_10="#ea76cb"   # pink
+tmux_conf_theme_colour_11="#40a02b"   # green
+tmux_conf_theme_colour_12="#8c8fa1"   # overlay1
+tmux_conf_theme_colour_13="#4c4f69"   # text
+tmux_conf_theme_colour_14="#dce0e8"   # crust
+tmux_conf_theme_colour_15="#dce0e8"   # crust
+tmux_conf_theme_colour_16="#d20f39"   # red
+tmux_conf_theme_colour_17="#4c4f69"   # text
+
+%else
+
 tmux_conf_theme_colour_1="#080808"    # dark gray
 tmux_conf_theme_colour_2="#303030"    # gray
 tmux_conf_theme_colour_3="#8a8a8a"    # light gray
@@ -103,6 +132,8 @@ tmux_conf_theme_colour_14="#080808"   # dark gray
 tmux_conf_theme_colour_15="#080808"   # dark gray
 tmux_conf_theme_colour_16="#d70000"   # red
 tmux_conf_theme_colour_17="#e4e4e4"   # white
+
+%endif
 
 # default theme (ansi)
 #tmux_conf_theme_colour_1="colour0"
@@ -350,6 +381,19 @@ tmux_conf_battery_hbar_palette="gradient"
 tmux_conf_battery_vbar_palette="gradient"
 #tmux_conf_battery_vbar_palette="#d70000,#ff5f00,#5fff00"  # red, orange, green
 #tmux_conf_battery_vbar_palette="gradient(#00afff,#47a2ff,#7c91ff,#ac7afb,#d65be2,#e163df,#eb6cdd,#f475db,#ec9ff1,#eac3fe,#efe2ff,#ffffff)"
+
+# Light override — the built-in `gradient` ramp is xterm colour196..46, which on
+# a light bg goes invisible in the middle (bright yellow is ~2.3:1 on the crust).
+#
+# _bar() SAMPLES the stop list by index, it does not interpolate — so a short
+# list reads as bands. 11 stops here, same count as the built-in, walking the
+# same red→green hue path but pinned to a narrow dark luminance band
+# (CR 3.72–5.02 on #dce0e8) so only hue changes across the bar.
+%if "#{==:#{WEZTERM_THEME},light}"
+tmux_conf_battery_bar_palette="gradient(#c01030,#c5340f,#b45309,#a16207,#856d0a,#6b7010,#4d7c0f,#3f7f1e,#2f7d32,#177245,#126950)"
+tmux_conf_battery_hbar_palette="#c01030,#a16207,#2f7d32"   # low, half, full
+tmux_conf_battery_vbar_palette="#c01030,#a16207,#2f7d32"
+%endif
 
 # symbols used to indicate whether battery is charging or discharging
 tmux_conf_battery_status_charging="↑"       # U+2191
