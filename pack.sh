@@ -45,7 +45,11 @@ HEADER
 for f in "${FILES[@]}"; do
   marker="$(echo "${f}" | tr '[:lower:].' '[:upper:]_' | sed 's/[-.]/_/g')"
   echo "_PAYLOAD_${marker}=\"\\"
-  base64 < "${SCRIPT_DIR}/${f}"
+  # Normalise line wrapping: GNU base64 wraps at 76, macOS/BSD emits one long
+  # line. Without this the packed output churns by ~3000 lines depending on
+  # which machine ran pack.sh.
+  base64 < "${SCRIPT_DIR}/${f}" | tr -d '\n' | fold -w 76
+  echo          # fold emits no trailing newline; keep the closing quote on its own line
   echo "\""
   echo
 done

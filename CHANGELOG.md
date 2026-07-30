@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-07-30
+
+### Added
+
+- **Light theme for tmux**: `tmux.config.local` now carries two colour blocks selected by `%if "#{==:#{WEZTERM_THEME},light}"` — Catppuccin Latte for light, the existing dark set otherwise. `WEZTERM_THEME` is exported by WezTerm's `bin/zsh-remap`; an unset value falls through to dark, so hosts without WezTerm are unaffected. `%if` is a parse-time directive and the variable is fixed per server, so a theme flip only reaches a **new** tmux server (`tmux kill-server`) — `source-file` on a running server won't switch it.
+- Light-mode battery palettes: the built-in `gradient` ramp (xterm `colour196`→`colour46`) goes near-invisible on a light status bar, since bright yellow measures ~2.3:1 against the Latte crust background. The light branch overrides all three (`bar`/`hbar`/`vbar`) with stops pinned to a narrow dark luminance band (CR 3.72–5.02) so only hue varies across the bar. 11 stops, matching the built-in's count — oh-my-tmux's `_bar()` *samples* the stop list by index rather than interpolating, so a short list renders as visible bands.
+
 ## [1.4.2] - 2026-07-16
 
 ### Fixed
