@@ -563,5 +563,7 @@ set -g allow-passthrough on
 
 # Enable OSC 8 hyperlinks (clickable links in Claude Code, etc.)
 # Shift+click to open links when tmux mouse mode is on.
-set -as terminal-features ',xterm*:hyperlinks'
-set -as terminal-features ',WezTerm*:hyperlinks'
+# Wildcard match: over ssh the client TERM varies (xterm-256color, screen-256color,
+# tmux-256color), so advertise hyperlinks to any outer terminal rather than only
+# xterm*/WezTerm* — the specific patterns miss ssh sessions whose TERM isn't xterm*.
+set -as terminal-features ',*:hyperlinks'
